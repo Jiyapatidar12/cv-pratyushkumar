@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # santifer.io
 
 **[:gb: English](#the-problem)** | **[:es: Español](#es-versión-en-español)**
@@ -562,3 +563,7 @@ MIT
 [![Website](https://img.shields.io/badge/santifer.io-000?style=for-the-badge&logo=safari&logoColor=white)](https://santifer.io)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/in/santifer)
 [![Email](https://img.shields.io/badge/Email-EA4335?style=for-the-badge&logo=gmail&logoColor=white)](mailto:hola@santifer.io)
+=======
+# cv-pratyushkumar
+Personal portfolio and CV of Pratyush Kumar showcasing skills, projects, and experience.
+>>>>>>> 430886974642a277604aaabcf5cb630a26d3492b
