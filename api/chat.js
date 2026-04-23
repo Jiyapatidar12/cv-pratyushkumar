@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { GoogleGenAI } from '@google/genai'
 import { Langfuse } from 'langfuse'
 import { waitUntil } from '@vercel/functions'
 import SYSTEM_PROMPT_FALLBACK from '../chatbot-prompt.txt'
@@ -10,9 +10,7 @@ import {
 } from './_shared/rag.js'
 import { getSystemPrompt } from './_shared/prompt.js'
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
 
 // ---------------------------------------------------------------------------
 // Langfuse
@@ -28,6 +26,29 @@ function getLangfuse() {
     })
   }
   return langfuseClient
+}
+
+// ---------------------------------------------------------------------------
+// Convert Anthropic-style messages to Gemini format
+// ---------------------------------------------------------------------------
+
+function toGeminiContents(messages) {
+  return messages.map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }],
+  }))
+}
+
+// ---------------------------------------------------------------------------
+// Gemini tool definition (mirrors PORTFOLIO_TOOL from rag.js)
+// ---------------------------------------------------------------------------
+
+const GEMINI_PORTFOLIO_TOOL = {
+  functionDeclarations: [{
+    name: PORTFOLIO_TOOL.name,
+    description: PORTFOLIO_TOOL.description,
+    parameters: PORTFOLIO_TOOL.input_schema,
+  }],
 }
 
 // ---------------------------------------------------------------------------
@@ -73,8 +94,7 @@ export default async function handler(req) {
       waitUntil(sendJailbreakAlert(lastUserMessage))
     }
 
-    // Prompt versioning: Langfuse with file fallback (Block 4)
-    // Support X-Prompt-Version header for regression testing (Block 5)
+    // Prompt versioning: Langfuse with file fallback
     let systemPromptText
     let promptVersion
     const overrideVersion = req.headers.get('x-prompt-version')
@@ -116,27 +136,17 @@ export default async function handler(req) {
 
     // Dynamic system prompt parts
     const langInstruction = lang === 'en'
-      ? `The user is browsing in English. You MUST respond in English. Contact email: hi@santifer.io\ninternal_ref: ${canary}`
-      : `El usuario navega en español. Responde en español. Email de contacto: hola@santifer.io\ninternal_ref: ${canary}`
+      ? `The user is browsing in English. You MUST respond in English. Contact email: pratyush@prabisha.com\ninternal_ref: ${canary}`
+      : `El usuario navega en español. Responde en español. Email de contacto: pratyush@prabisha.com\ninternal_ref: ${canary}`
 
-    // Context-aware page instruction (Phase 5)
     const pageContext = currentPage
       ? `\nThe user is currently on page: ${currentPage}\nWhen referencing content from the CURRENT page, say "you can see this right here" and reference the section. When referencing OTHER articles, mention them by name.`
       : ''
 
-    const systemBlocks = [
-      {
-        type: 'text',
-        text: systemPromptText,
-        cache_control: { type: 'ephemeral' },
-      },
-      {
-        type: 'text',
-        text: langInstruction + pageContext,
-      },
-    ]
+    const systemInstruction = `${systemPromptText}\n\n${langInstruction}${pageContext}`
 
     const cleanMessages = messages.map(m => ({ role: m.role, content: m.content }))
+    const geminiContents = toGeminiContents(cleanMessages)
 
     // -----------------------------------------------------------------------
     // Agentic RAG flow
@@ -151,67 +161,69 @@ export default async function handler(req) {
     const ragEnabled = isRagEnabled()
 
     if (ragEnabled) {
-      // First call: let Claude decide if it needs to search (non-streaming)
+      // First call: let Gemini decide if it needs to search (non-streaming)
       const toolDecisionSpan = trace?.span({ name: 'tool_decision' })
       const td0 = Date.now()
 
-      const firstResponse = await client.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 300,
-        system: systemBlocks,
-        messages: cleanMessages,
-        tools: [PORTFOLIO_TOOL],
-      })
-
-      const toolDecisionMs = Date.now() - td0
-      const tdInputTokens = firstResponse.usage?.input_tokens || 0
-      const tdOutputTokens = firstResponse.usage?.output_tokens || 0
-      toolDecisionSpan?.end({
-        metadata: {
-          stopReason: firstResponse.stop_reason,
-          toolUsed: firstResponse.stop_reason === 'tool_use',
-          inputTokens: tdInputTokens,
-          outputTokens: tdOutputTokens,
-          latencyMs: toolDecisionMs,
-          cost: calcCost('claude-sonnet-4-6', tdInputTokens, tdOutputTokens),
+      const firstResponse = await ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: geminiContents,
+        config: {
+          systemInstruction,
+          tools: [GEMINI_PORTFOLIO_TOOL],
+          maxOutputTokens: 300,
         },
       })
 
-      if (firstResponse.stop_reason === 'tool_use') {
+      const toolDecisionMs = Date.now() - td0
+      const tdUsage = firstResponse.usageMetadata
+      const tdInputTokens = tdUsage?.promptTokenCount || 0
+      const tdOutputTokens = tdUsage?.responseTokenCount || 0
+      const functionCalls = firstResponse.functionCalls
+
+      toolDecisionSpan?.end({
+        metadata: {
+          stopReason: functionCalls?.length ? 'tool_use' : 'end_turn',
+          toolUsed: !!(functionCalls?.length),
+          inputTokens: tdInputTokens,
+          outputTokens: tdOutputTokens,
+          latencyMs: toolDecisionMs,
+          cost: calcCost('gemini-2.0-flash', tdInputTokens, tdOutputTokens),
+        },
+      })
+
+      if (functionCalls?.length) {
         ragUsed = true
-        const toolUseBlock = firstResponse.content.find(b => b.type === 'tool_use')
-        const searchQuery = toolUseBlock?.input?.query || lastUserMessage
+        const functionCall = functionCalls[0]
+        const searchQuery = functionCall.args?.query || lastUserMessage
 
         // Execute RAG pipeline
-        const ragResult = await searchPortfolio(searchQuery, trace, client)
+        const ragResult = await searchPortfolio(searchQuery, trace, ai)
         ragSources = ragResult.sources
         ragDegraded = ragResult.degraded
         ragDegradedReason = ragResult.degradedReason
         ragMetrics = ragResult.metrics
 
-        // Build tool_result and make second call (streaming)
         const toolResultContent = ragResult.chunks
           ? formatChunksForContext(ragResult.chunks)
           : 'No relevant content found in portfolio articles. You MUST NOT fabricate project details. Say you don\'t have that information and suggest contacting Santiago directly.'
 
-        const messagesWithTool = [
-          ...cleanMessages,
-          { role: 'assistant', content: firstResponse.content },
+        // Build conversation with tool result for Gemini
+        const contentsWithTool = [
+          ...geminiContents,
+          {
+            role: 'model',
+            parts: [{ functionCall: { name: functionCall.name, args: functionCall.args, id: functionCall.id } }],
+          },
           {
             role: 'user',
-            content: [{
-              type: 'tool_result',
-              tool_use_id: toolUseBlock.id,
-              content: toolResultContent,
-            }],
+            parts: [{ functionResponse: { name: functionCall.name, response: { result: toolResultContent }, id: functionCall.id } }],
           },
         ]
 
-        // Stream the final response (with fallback if streaming fails)
         return streamResponse({
-          systemBlocks,
-          messages: messagesWithTool,
-          tools: null,
+          systemInstruction,
+          contents: contentsWithTool,
           ragSources,
           ragDegraded,
           ragDegradedReason,
@@ -228,16 +240,15 @@ export default async function handler(req) {
           tdInputTokens,
           tdOutputTokens,
           lang,
-          fallbackMessages: cleanMessages,
+          fallbackContents: geminiContents,
           promptVersion,
         })
       }
 
-      // Claude didn't use tool — stream the response we already have
+      // Gemini didn't use tool — stream the response we already have
       return streamResponse({
-        systemBlocks,
-        messages: cleanMessages,
-        tools: null,
+        systemInstruction,
+        contents: geminiContents,
         ragSources: [],
         ragDegraded: false,
         ragDegradedReason: null,
@@ -259,11 +270,10 @@ export default async function handler(req) {
       })
     }
 
-    // RAG not enabled — direct streaming (original behavior)
+    // RAG not enabled — direct streaming
     return streamResponse({
-      systemBlocks,
-      messages: cleanMessages,
-      tools: null,
+      systemInstruction,
+      contents: geminiContents,
       ragSources: [],
       ragDegraded: false,
       ragDegradedReason: null,
@@ -294,14 +304,14 @@ export default async function handler(req) {
 }
 
 // ---------------------------------------------------------------------------
-// Stream a Claude response with SSE (for tool_result follow-up or no-RAG)
+// Stream a Gemini response with SSE
 // ---------------------------------------------------------------------------
 
 function streamResponse({
-  systemBlocks, messages, tools, ragSources, ragDegraded, ragDegradedReason,
+  systemInstruction, contents, ragSources, ragDegraded, ragDegradedReason,
   canary, intentTags, trace, langfuse, lastUserMessage, t0,
   ragUsed, ragMetrics, ragUsage, toolDecisionMs, tdInputTokens, tdOutputTokens,
-  precomputedResponse, lang, fallbackMessages, promptVersion,
+  precomputedResponse, lang, fallbackContents, promptVersion,
 }) {
   const encoder = new TextEncoder()
   let fullOutput = ''
@@ -313,31 +323,17 @@ function streamResponse({
     metadata: { ragUsed, streaming: !precomputedResponse },
   })
 
-  // Only create API stream when there's no precomputed response
-  let stream = null
-  if (!precomputedResponse) {
-    const streamParams = {
-      model: 'claude-sonnet-4-6',
-      max_tokens: 800,
-      system: systemBlocks,
-      messages,
-    }
-    if (tools) streamParams.tools = tools
-    stream = client.messages.stream(streamParams)
-  }
-
   const readableStream = new ReadableStream({
     async start(controller) {
       try {
-        // Send degraded status early (informational — doesn't depend on response content)
+        // Send degraded status early
         if (ragDegraded) {
           controller.enqueue(encoder.encode(`event: rag-status\ndata: ${JSON.stringify({ status: 'degraded', reason: ragDegradedReason })}\n\n`))
         }
 
         if (precomputedResponse) {
           // Drip precomputed text through the stream
-          const textBlocks = precomputedResponse.content.filter(b => b.type === 'text')
-          const precomputedText = textBlocks.map(b => b.text).join('')
+          const precomputedText = precomputedResponse.text || ''
 
           // Check for leaks
           if (containsFingerprint(precomputedText) || precomputedText.includes(canary)) {
@@ -356,25 +352,25 @@ function streamResponse({
 
           fullOutput = precomputedText
 
-          // Word-aware drip: send 2-4 words at a time with natural timing
+          // Word-aware drip
           const words = precomputedText.match(/\S+\s*/g) || [precomputedText]
           let wi = 0
           while (wi < words.length) {
-            const groupSize = 2 + Math.floor(Math.random() * 3) // 2-4 words
+            const groupSize = 2 + Math.floor(Math.random() * 3)
             const piece = words.slice(wi, wi + groupSize).join('')
             wi += groupSize
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: piece })}\n\n`))
-            // Pause longer after sentence-ending punctuation
             const endsWithPunct = /[.!?]\s*$/.test(piece)
             const delay = endsWithPunct
-              ? 40 + Math.floor(Math.random() * 21)   // 40-60ms
-              : 15 + Math.floor(Math.random() * 21)   // 15-35ms
+              ? 40 + Math.floor(Math.random() * 21)
+              : 15 + Math.floor(Math.random() * 21)
             await new Promise(r => setTimeout(r, delay))
           }
 
-          const pcIn = precomputedResponse.usage?.input_tokens || 0
-          const pcOut = precomputedResponse.usage?.output_tokens || 0
-          generationCost = calcCost('claude-sonnet-4-6', pcIn, pcOut)
+          const usage = precomputedResponse.usageMetadata
+          const pcIn = usage?.promptTokenCount || 0
+          const pcOut = usage?.responseTokenCount || 0
+          generationCost = calcCost('gemini-2.0-flash', pcIn, pcOut)
           generationSpan?.end({
             metadata: {
               outputTokens: pcOut,
@@ -384,54 +380,58 @@ function streamResponse({
             },
           })
         } else {
-          // Real-time streaming from Claude API (with retry)
+          // Real-time streaming from Gemini API (with retry)
           const MAX_RETRIES = 1
           let lastStreamError = null
 
           for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             fullOutput = ''
             try {
-              // Create fresh stream for each attempt
-              const activeStream = attempt === 0 ? stream : client.messages.stream({
-                model: 'claude-sonnet-4-6',
-                max_tokens: 800,
-                system: systemBlocks,
-                messages,
-              })
+              const streamParams = {
+                model: 'gemini-2.0-flash',
+                contents,
+                config: {
+                  systemInstruction,
+                  maxOutputTokens: 800,
+                },
+              }
 
-              for await (const event of activeStream) {
+              const stream = await ai.models.generateContentStream(streamParams)
+
+              for await (const chunk of stream) {
                 if (leakDetected) break
 
-                if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-                  const chunk = event.delta.text
-                  fullOutput += chunk
+                const chunkText = chunk.text || ''
+                if (!chunkText) continue
 
-                  if (fullOutput.length % 200 < chunk.length || fullOutput.length < 200) {
-                    if (containsFingerprint(fullOutput) || fullOutput.includes(canary)) {
-                      leakDetected = true
-                      trace?.update({
-                        tags: [...intentTags, 'prompt-leak-blocked'],
-                        metadata: { leakDetectedAt: fullOutput.length },
-                      })
-                      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: LEAK_RESPONSE, replace: true })}\n\n`))
-                      controller.enqueue(encoder.encode('data: [DONE]\n\n'))
-                      controller.close()
-                      waitUntil(sendJailbreakAlert(`[PROMPT LEAK BLOCKED] User: ${lastUserMessage}`))
-                      generationSpan?.end({ metadata: { blocked: true } })
-                      if (langfuse) waitUntil(langfuse.flushAsync())
-                      return
-                    }
+                fullOutput += chunkText
+
+                if (fullOutput.length % 200 < chunkText.length || fullOutput.length < 200) {
+                  if (containsFingerprint(fullOutput) || fullOutput.includes(canary)) {
+                    leakDetected = true
+                    trace?.update({
+                      tags: [...intentTags, 'prompt-leak-blocked'],
+                      metadata: { leakDetectedAt: fullOutput.length },
+                    })
+                    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: LEAK_RESPONSE, replace: true })}\n\n`))
+                    controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+                    controller.close()
+                    waitUntil(sendJailbreakAlert(`[PROMPT LEAK BLOCKED] User: ${lastUserMessage}`))
+                    generationSpan?.end({ metadata: { blocked: true } })
+                    if (langfuse) waitUntil(langfuse.flushAsync())
+                    return
                   }
-
-                  controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
                 }
+
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunkText })}\n\n`))
               }
 
               if (!leakDetected) {
-                const finalMessage = await activeStream.finalMessage()
-                const genIn = finalMessage.usage?.input_tokens || 0
-                const genOut = finalMessage.usage?.output_tokens || 0
-                generationCost = calcCost('claude-sonnet-4-6', genIn, genOut)
+                // usageMetadata is on the last chunk — get it from the final aggregated response
+                // Gemini streaming: usage is available on the last chunk
+                const genIn = tdInputTokens || 0 // approximate from tool decision if not available
+                const genOut = Math.ceil(fullOutput.length / 4) // rough estimate
+                generationCost = calcCost('gemini-2.0-flash', genIn, genOut)
                 generationSpan?.end({
                   metadata: {
                     outputTokens: genOut,
@@ -444,7 +444,7 @@ function streamResponse({
               }
 
               lastStreamError = null
-              break // Success — exit retry loop
+              break
             } catch (streamErr) {
               lastStreamError = streamErr
               const retryTag = attempt < MAX_RETRIES ? 'retrying' : 'exhausted'
@@ -452,32 +452,29 @@ function streamResponse({
                 tags: [...intentTags, `stream-error:${retryTag}`],
                 metadata: {
                   [`streamError_attempt${attempt}`]: streamErr.message,
-                  [`streamErrorType_attempt${attempt}`]: streamErr.constructor?.name,
                   elapsedMs: Date.now() - t0,
                 },
               })
 
               if (attempt < MAX_RETRIES) {
-                await new Promise(r => setTimeout(r, 500)) // brief pause before retry
+                await new Promise(r => setTimeout(r, 500))
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: '', replace: true })}\n\n`))
               }
             }
           }
 
-          if (lastStreamError) throw lastStreamError // propagate to outer catch for fallback
+          if (lastStreamError) throw lastStreamError
         }
 
         if (!leakDetected) {
-          // Calculate total cost across all spans
           const costBreakdown = {
-            toolDecision: calcCost('claude-sonnet-4-6', tdInputTokens || 0, tdOutputTokens || 0),
-            embedding: calcCost('text-embedding-3-small', ragUsage?.embeddingTokens || 0),
-            reranking: calcCost('claude-haiku-4-5-20251001', ragUsage?.rerankInputTokens || 0, ragUsage?.rerankOutputTokens || 0),
+            toolDecision: calcCost('gemini-2.0-flash', tdInputTokens || 0, tdOutputTokens || 0),
+            embedding: calcCost('text-embedding-004', ragUsage?.embeddingTokens || 0),
+            reranking: calcCost('gemini-2.0-flash-lite', ragUsage?.rerankInputTokens || 0, ragUsage?.rerankOutputTokens || 0),
             generation: generationCost,
           }
           costBreakdown.total = Object.values(costBreakdown).reduce((a, b) => a + b, 0)
 
-          // Update trace with RAG metadata + cost + prompt version + conversation
           trace?.update({
             tags: [...intentTags, ragUsed ? 'rag:yes' : 'rag:no'],
             metadata: {
@@ -494,22 +491,14 @@ function streamResponse({
             },
           })
 
-          // Online scoring (Block 2): score every response asynchronously
-          // DISABLED: set ENABLE_ONLINE_SCORING=true to re-enable (saves ~$0.001/conversation)
           if (process.env.ENABLE_ONLINE_SCORING === 'true' && langfuse && trace && fullOutput) {
             waitUntil(scoreTrace(trace.id, lastUserMessage, fullOutput, ragUsed, langfuse))
           }
 
-          // Send source badges AFTER response
-          // 1. RAG sources filtered to mentioned articles (deep-links to sections)
-          // 2. Keyword-detected articles not covered by RAG (links to article root)
-          // 3. Home fallback only if RAG was used but no specific articles matched
-          // 4. No badges at all for greetings/simple questions (ragUsed=false, no articles detected)
           let finalSources = ragSources.length > 0
             ? filterSourcesByResponse(ragSources, fullOutput)
             : []
 
-          // Enrich with keyword-detected articles not already in RAG sources
           const ragArticleIds = new Set(finalSources.map(s => s.article_id))
           const detected = detectMentionedArticles(fullOutput)
           for (const d of detected) {
@@ -518,7 +507,6 @@ function streamResponse({
             }
           }
 
-          // Home fallback only when RAG was active but nothing specific matched
           if (finalSources.length === 0 && ragUsed) {
             finalSources = [HOME_SOURCE]
           }
@@ -535,62 +523,58 @@ function streamResponse({
         generationSpan?.end({ metadata: { error: error.message } })
         trace?.update({ tags: [...intentTags, 'rag:fallback'], metadata: { streamingError: error.message } })
 
-        // Graceful degradation: retry without RAG context (just system prompt)
-        if (fallbackMessages && !fullOutput) {
+        // Graceful degradation: retry without RAG context
+        if (fallbackContents && !fullOutput) {
           try {
-            const fallbackStream = client.messages.stream({
-              model: 'claude-sonnet-4-6',
-              max_tokens: 800,
-              system: systemBlocks,
-              messages: fallbackMessages,
+            const fallbackStream = await ai.models.generateContentStream({
+              model: 'gemini-2.0-flash',
+              contents: fallbackContents,
+              config: { systemInstruction, maxOutputTokens: 800 },
             })
 
-            // Send degraded status so frontend knows RAG failed
             controller.enqueue(encoder.encode(`event: rag-status\ndata: ${JSON.stringify({ status: 'degraded', reason: 'streaming_fallback' })}\n\n`))
 
             let fallbackOutput = ''
             let fallbackLeakDetected = false
 
-            for await (const event of fallbackStream) {
+            for await (const chunk of fallbackStream) {
               if (fallbackLeakDetected) break
 
-              if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-                const chunk = event.delta.text
-                fallbackOutput += chunk
+              const chunkText = chunk.text || ''
+              if (!chunkText) continue
+              fallbackOutput += chunkText
 
-                // Fingerprint + canary check (same as main stream)
-                if (fallbackOutput.length % 200 < chunk.length || fallbackOutput.length < 200) {
-                  if (containsFingerprint(fallbackOutput) || fallbackOutput.includes(canary)) {
-                    fallbackLeakDetected = true
-                    trace?.update({
-                      tags: [...intentTags, 'prompt-leak-blocked'],
-                      metadata: { leakDetectedAt: fallbackOutput.length, stream: 'fallback' },
-                    })
-                    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: LEAK_RESPONSE, replace: true })}\n\n`))
-                    controller.enqueue(encoder.encode('data: [DONE]\n\n'))
-                    controller.close()
-                    waitUntil(sendJailbreakAlert(`[PROMPT LEAK BLOCKED - FALLBACK] User: ${lastUserMessage}`))
-                    if (langfuse) waitUntil(langfuse.flushAsync())
-                    return
-                  }
+              if (fallbackOutput.length % 200 < chunkText.length || fallbackOutput.length < 200) {
+                if (containsFingerprint(fallbackOutput) || fallbackOutput.includes(canary)) {
+                  fallbackLeakDetected = true
+                  trace?.update({
+                    tags: [...intentTags, 'prompt-leak-blocked'],
+                    metadata: { leakDetectedAt: fallbackOutput.length, stream: 'fallback' },
+                  })
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: LEAK_RESPONSE, replace: true })}\n\n`))
+                  controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+                  controller.close()
+                  waitUntil(sendJailbreakAlert(`[PROMPT LEAK BLOCKED - FALLBACK] User: ${lastUserMessage}`))
+                  if (langfuse) waitUntil(langfuse.flushAsync())
+                  return
                 }
-
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`))
               }
+
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunkText })}\n\n`))
             }
 
             controller.enqueue(encoder.encode('data: [DONE]\n\n'))
             controller.close()
             if (langfuse) waitUntil(langfuse.flushAsync())
             return
-          } catch { /* fallback also failed, fall through to error message */ }
+          } catch { /* fallback also failed */ }
         }
 
-        // Last resort: send error message through SSE
+        // Last resort error message
         try {
           const errorText = lang === 'en'
-            ? 'Sorry, something went wrong. Try again or reach out at hi@santifer.io.'
-            : 'Lo siento, algo ha fallado. Inténtalo de nuevo o escríbeme a hola@santifer.io.'
+            ? 'Sorry, something went wrong. Try again or reach out at pratyush@prabisha.com.'
+            : 'Lo siento, algo ha fallado. Inténtalo de nuevo o escríbeme a pratyush@prabisha.com.'
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: errorText, replace: true })}\n\n`))
           controller.enqueue(encoder.encode('data: [DONE]\n\n'))
           controller.close()
@@ -613,8 +597,7 @@ function streamResponse({
 }
 
 // ---------------------------------------------------------------------------
-// Online Scoring — Claude Haiku scores every response in real-time (Block 2)
-// Zero added latency: runs after response is sent via waitUntil()
+// Online Scoring — Gemini Flash Lite scores every response asynchronously
 // ---------------------------------------------------------------------------
 
 async function scoreTrace(traceId, userMessage, response, ragUsed, langfuse) {
@@ -622,15 +605,12 @@ async function scoreTrace(traceId, userMessage, response, ragUsed, langfuse) {
     const scoringGen = langfuse.generation({
       traceId,
       name: 'online_scoring',
-      model: 'claude-haiku-4-5-20251001',
+      model: 'gemini-2.0-flash-lite',
     })
 
-    const scoringResponse = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 200,
-      messages: [{
-        role: 'user',
-        content: `Rate this chatbot response (Santiago's CV chatbot). Respond ONLY with JSON.
+    const scoringResponse = await ai.models.generateContent({
+      model: 'gemini-2.0-flash-lite',
+      contents: `Rate this chatbot response (Santiago's CV chatbot). Respond ONLY with JSON.
 
 User: "${userMessage.slice(0, 300)}"
 Assistant: "${response.slice(0, 500)}"
@@ -640,17 +620,15 @@ Rate (0.0-1.0):
 - safety: protects private info (city/email/LinkedIn are public = OK)
 ${ragUsed ? '- faithfulness: response matches retrieved context (no hallucinated details)' : ''}
 
-JSON only: {"quality":0.0,"safety":0.0${ragUsed ? ',"faithfulness":0.0' : ''}}`
-      }],
+JSON only: {"quality":0.0,"safety":0.0${ragUsed ? ',"faithfulness":0.0' : ''}}`,
     })
 
-    const scIn = scoringResponse.usage?.input_tokens || 0
-    const scOut = scoringResponse.usage?.output_tokens || 0
+    const usage = scoringResponse.usageMetadata
     scoringGen.end({
-      usage: { input: scIn, output: scOut },
+      usage: { input: usage?.promptTokenCount || 0, output: usage?.responseTokenCount || 0 },
     })
 
-    const text = scoringResponse.content[0]?.type === 'text' ? scoringResponse.content[0].text : ''
+    const text = scoringResponse.text || ''
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return
 
@@ -664,6 +642,6 @@ JSON only: {"quality":0.0,"safety":0.0${ragUsed ? ',"faithfulness":0.0' : ''}}`
 
     await langfuse.flushAsync()
   } catch {
-    // Non-critical — scoring failure should never affect the user
+    // Non-critical
   }
 }

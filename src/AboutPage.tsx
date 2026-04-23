@@ -1,18 +1,18 @@
-import { useEffect } from 'react'
+﻿import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { MapPin, Mail, ExternalLink, Award, GraduationCap, Briefcase, ChevronRight, Clock, Newspaper, HelpCircle, Users } from 'lucide-react'
 import { aboutContent, type AboutLang } from './about-i18n'
 
 const SOCIAL_LINKS = [
-  { name: 'LinkedIn', url: 'https://www.linkedin.com/in/santifer' },
-  { name: 'GitHub', url: 'https://github.com/santifer' },
-  { name: 'YouTube', url: 'https://www.youtube.com/@santifer_io' },
-  { name: 'X / Twitter', url: 'https://x.com/santifer' },
-  { name: 'Dev.to', url: 'https://dev.to/santifer' },
-  { name: 'Substack', url: 'https://santifer.substack.com' },
+  { name: 'LinkedIn', url: 'https://www.linkedin.com/in/pratyushk' },
+  { name: 'GitHub', url: 'https://github.com/pratyushk' },
+  { name: 'YouTube', url: 'https://www.youtube.com/@pratyushk_io' },
+  { name: 'X / Twitter', url: 'https://x.com/pratyush' },
+  { name: 'Dev.to', url: 'https://dev.to/pratyush' },
+  { name: 'Substack', url: 'https://pratyush.substack.com' },
   { name: 'Stack Overflow', url: 'https://stackoverflow.com/users/32541743' },
   { name: 'ORCID', url: 'https://orcid.org/0009-0006-2192-7210' },
-  { name: 'Crunchbase', url: 'https://www.crunchbase.com/person/santiago-fernandez-de-valderrama' },
+  { name: 'Crunchbase', url: 'https://www.linkedin.com/in/pratyushk' },
   { name: 'Wikidata', url: 'https://www.wikidata.org/wiki/Q138710224' },
 ]
 
@@ -30,12 +30,12 @@ export default function AboutPage({ lang = 'es' }: { lang?: AboutLang }) {
 
     let canonical = document.querySelector('link[rel="canonical"]') as HTMLLinkElement
     if (!canonical) { canonical = document.createElement('link'); canonical.rel = 'canonical'; document.head.appendChild(canonical) }
-    canonical.href = `https://santifer.io/${t.slug}`
+    canonical.href = `https://pratyush.prabisha.com/${t.slug}`
 
     const hreflangs = [
-      { lang: 'es', href: 'https://santifer.io/sobre-mi' },
-      { lang: 'en', href: 'https://santifer.io/about' },
-      { lang: 'x-default', href: 'https://santifer.io/sobre-mi' },
+      { lang: 'es', href: 'https://pratyush.prabisha.com/sobre-mi' },
+      { lang: 'en', href: 'https://pratyush.prabisha.com/about' },
+      { lang: 'x-default', href: 'https://pratyush.prabisha.com/sobre-mi' },
     ]
     document.querySelectorAll('link[hreflang]').forEach(el => el.remove())
     for (const hl of hreflangs) {
@@ -54,12 +54,12 @@ export default function AboutPage({ lang = 'es' }: { lang?: AboutLang }) {
       dateModified: '2026-04-08T00:00:00+02:00',
       mainEntity: {
         '@type': 'Person',
-        '@id': 'https://santifer.io/#person',
-        name: 'Santiago Fernández de Valderrama Aparicio',
-        alternateName: ['Santiago Fernández de Valderrama', 'santifer', 'Santi'],
-        url: 'https://santifer.io',
-        image: 'https://santifer.io/foto-avatar.png',
-        email: 'hola@santifer.io',
+        '@id': 'https://pratyush.prabisha.com/#person',
+        name: 'Pratyush Kumar',
+        alternateName: ['Pratyush Kumar', 'pratyush', 'Santi'],
+        url: 'https://pratyush.prabisha.com',
+        image: 'https://pratyush.prabisha.com/pratyush-avatar.jpg',
+        email: 'pratyush@prabisha.com',
         jobTitle: ['Head of Applied AI', 'AI Product Manager', 'Solutions Architect (No/Low-Code & AI)', 'AI Forward Deployed Engineer'],
         knowsAbout: [
           { '@type': 'Thing', name: 'Artificial Intelligence', url: 'https://en.wikipedia.org/wiki/Artificial_intelligence' },
@@ -91,31 +91,31 @@ export default function AboutPage({ lang = 'es' }: { lang?: AboutLang }) {
         ],
         founder: {
           '@type': 'Organization',
-          name: 'Santifer iRepair',
-          url: 'https://santiferirepair.es',
+          name: 'pratyush iRepair',
+          url: 'https://pratyushirepair.es',
           foundingDate: '2009',
         },
         sameAs: [
-          'https://www.linkedin.com/in/santifer',
-          'https://github.com/santifer',
-          'https://x.com/santifer',
-          'https://dev.to/santifer',
-          'https://santifer.substack.com',
-          'https://contentdigest.santifer.io',
-          'https://www.youtube.com/@santifer_io',
+          'https://www.linkedin.com/in/pratyushk',
+          'https://github.com/pratyushk',
+          'https://x.com/pratyush',
+          'https://dev.to/pratyush',
+          'https://pratyush.substack.com',
+          'https://contentdigest.pratyush.prabisha.com',
+          'https://www.youtube.com/@pratyushk_io',
           'https://stackoverflow.com/users/32541743',
           'https://orcid.org/0009-0006-2192-7210',
-          'https://www.crunchbase.com/person/santiago-fernandez-de-valderrama',
-          'https://huggingface.co/santifer',
+          'https://www.linkedin.com/in/pratyushk',
+          'https://huggingface.co/pratyush',
           'https://www.wikidata.org/wiki/Q138710224',
-          'https://santiferirepair.es',
-          'https://www.facebook.com/santifer.io/',
-          'https://www.producthunt.com/@santifer',
-          'https://app.daily.dev/santifer',
+          'https://pratyushirepair.es',
+          'https://www.facebook.com/pratyush.prabisha.com/',
+          'https://www.producthunt.com/@pratyushk',
+          'https://app.daily.dev/pratyush',
         ],
         subjectOf: {
           '@type': 'NewsArticle',
-          headline: 'Salir de compras: Una solución exprés para el teléfono',
+          headline: 'Salir de compras: Una soluci�n expr�s para el tel�fono',
           publisher: { '@type': 'NewsMediaOrganization', name: 'Diario de Sevilla' },
           datePublished: '2014-06-19',
           url: 'https://www.diariodesevilla.es/vivirensevilla/Salir-compras-solucion-expres-telefono_0_817718799.html',
@@ -137,10 +137,10 @@ export default function AboutPage({ lang = 'es' }: { lang?: AboutLang }) {
         {/* Header */}
         <header className="flex flex-col sm:flex-row items-center sm:items-start gap-6 mb-10">
           <img
-            src="/foto-avatar-sm.webp"
-            srcSet="/foto-avatar-sm.webp 192w, /foto-avatar.webp 384w"
+            src="/pratyush-avatar.jpg"
+            srcSet="/pratyush-avatar.jpg 192w, /pratyush-avatar.jpg 384w"
             sizes="96px"
-            alt="Santiago Fernández de Valderrama"
+            alt="Pratyush Kumar"
             className="w-24 h-24 rounded-full border-2 border-border shadow-lg"
             width={96}
             height={96}
@@ -196,7 +196,7 @@ export default function AboutPage({ lang = 'es' }: { lang?: AboutLang }) {
                 <span className="text-xs font-mono text-primary whitespace-nowrap pt-0.5">{item.period}</span>
                 <div>
                   <p className="font-medium text-foreground text-sm">{item.role}</p>
-                  <p className="text-xs text-muted-foreground">{item.company} — {item.desc}</p>
+                  <p className="text-xs text-muted-foreground">{item.company} � {item.desc}</p>
                 </div>
               </div>
             ))}
@@ -275,7 +275,7 @@ export default function AboutPage({ lang = 'es' }: { lang?: AboutLang }) {
             >
               <div>
                 <p className="font-medium text-foreground text-sm group-hover:text-primary transition-colors">{item.title}</p>
-                <p className="text-xs text-muted-foreground">{item.publisher} · {item.date}</p>
+                <p className="text-xs text-muted-foreground">{item.publisher} � {item.date}</p>
               </div>
               <ExternalLink className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
             </a>
@@ -360,14 +360,14 @@ export default function AboutPage({ lang = 'es' }: { lang?: AboutLang }) {
             to={`/${altSlug}`}
             className="text-sm text-muted-foreground hover:text-primary transition-colors"
           >
-            {lang === 'es' ? 'Read in English →' : 'Leer en Español →'}
+            {lang === 'es' ? 'Read in English ?' : 'Leer en Espa�ol ?'}
           </Link>
         </div>
 
         {/* Footer */}
         <footer className="mt-8 text-center">
           <p className="text-xs text-muted-foreground">
-            &copy; {new Date().getFullYear()} Santiago Fernández de Valderrama. {lang === 'es' ? 'Todos los derechos reservados.' : 'All rights reserved.'}
+            &copy; {new Date().getFullYear()} Pratyush Kumar. {lang === 'es' ? 'Todos los derechos reservados.' : 'All rights reserved.'}
           </p>
         </footer>
       </main>

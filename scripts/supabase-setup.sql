@@ -9,14 +9,14 @@ create table if not exists public.documents (
   id bigserial primary key,
   content text not null,
   metadata jsonb default '{}'::jsonb,
-  embedding vector(1536),
+  embedding vector(768),
   fts tsvector generated always as (to_tsvector('english', content)) stored
 );
 
 -- 3. Hybrid search function (vector similarity + BM25 keyword match)
 create or replace function hybrid_search (
   query_text text,
-  query_embedding vector(1536),
+  query_embedding vector(768),
   match_count int default 10,
   semantic_weight float default 0.7,
   keyword_weight float default 0.3,

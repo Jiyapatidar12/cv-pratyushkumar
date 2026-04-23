@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:api": "node local-api-server.mjs",
     "rag:export": "npx tsx --tsconfig tsconfig.app.json scripts/export-chunks.ts",
     "rag:ingest": "npx tsx --tsconfig tsconfig.app.json scripts/ingest-rag.ts",
     "rag:sync": "npm run rag:export && npm run rag:ingest",
@@ -27,6 +28,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
+    "@google/genai": "^1.49.0",
     "@supabase/supabase-js": "^2.99.1",
     "@vercel/analytics": "^1.6.1",
     "@vercel/functions": "^3.3.6",

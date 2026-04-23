@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react'
+﻿import type { ComponentType } from 'react'
 
 export interface ArticleSeo {
   title: string
@@ -563,8 +563,8 @@ export function getAltPaths(): Record<string, string> {
 
 export function getPageTitles(): Record<string, string> {
   const map: Record<string, string> = {
-    '/': 'Portfolio de Santiago',
-    '/en': "Santiago's Portfolio",
+    '/': 'Portfolio de Pratyush Kumar',
+    '/en': "Pratyush Kumar's Portfolio",
     '/sobre-mi': 'Sobre Mí',
     '/about': 'About',
   }

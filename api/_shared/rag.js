@@ -7,9 +7,9 @@
 // ---------------------------------------------------------------------------
 
 export const MODEL_COSTS = {
-  'claude-sonnet-4-6': { input: 3.0 / 1e6, output: 15.0 / 1e6 },
-  'claude-haiku-4-5-20251001': { input: 0.25 / 1e6, output: 1.25 / 1e6 },
-  'text-embedding-3-small': { input: 0.02 / 1e6 },
+  'gemini-2.0-flash': { input: 0.10 / 1e6, output: 0.40 / 1e6 },
+  'gemini-2.0-flash-lite': { input: 0.075 / 1e6, output: 0.30 / 1e6 },
+  'text-embedding-004': { input: 0.0 / 1e6 }, // Gemini embeddings are free
 }
 
 export function calcCost(model, inputTokens, outputTokens = 0) {
@@ -22,7 +22,7 @@ export function calcCost(model, inputTokens, outputTokens = 0) {
 // ---------------------------------------------------------------------------
 
 export function isRagEnabled() {
-  return !!(process.env.OPENAI_API_KEY && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
+  return !!(process.env.GEMINI_API_KEY && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
 }
 
 export const PORTFOLIO_TOOL = {
@@ -41,32 +41,32 @@ export const PORTFOLIO_TOOL = {
 }
 
 // ---------------------------------------------------------------------------
-// RAG: embed query via OpenAI REST API (Edge-compatible)
+// RAG: embed query via Gemini REST API (Edge-compatible)
 // ---------------------------------------------------------------------------
 
 export async function embedQuery(query) {
   const t0 = Date.now()
-  const response = await fetch('https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'text-embedding-3-small',
-      input: query,
-    }),
-  })
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${process.env.GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'models/text-embedding-004',
+        content: { parts: [{ text: query }] },
+      }),
+    }
+  )
 
   if (!response.ok) {
-    throw new Error(`OpenAI embedding failed: ${response.status}`)
+    throw new Error(`Gemini embedding failed: ${response.status}`)
   }
 
   const data = await response.json()
   return {
-    embedding: data.data[0].embedding,
+    embedding: data.embedding.values,
     latencyMs: Date.now() - t0,
-    totalTokens: data.usage?.total_tokens || 0,
+    totalTokens: query.split(' ').length, // approximate
   }
 }
 
@@ -125,7 +125,7 @@ export async function searchDocuments(queryText, queryEmbedding) {
 // RAG: re-rank top-10 → top-3 with Haiku
 // ---------------------------------------------------------------------------
 
-export async function rerankChunks(query, chunks, anthropicClient) {
+export async function rerankChunks(query, chunks, geminiClient) {
   if (chunks.length <= 3) return { chunks, latencyMs: 0, rerankedOrder: null, usage: null }
 
   const t0 = Date.now()
@@ -134,20 +134,16 @@ export async function rerankChunks(query, chunks, anthropicClient) {
       `[${i}] ${c.content.slice(0, 200)}`
     ).join('\n')
 
-    const response = await anthropicClient.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 50,
-      messages: [{
-        role: 'user',
-        content: `Query: "${query}"\nRank these chunks by relevance. Return ONLY the top 5 IDs as comma-separated numbers (most relevant first):\n${numbered}`,
-      }],
+    const response = await geminiClient.models.generateContent({
+      model: 'gemini-2.0-flash-lite',
+      contents: `Query: "${query}"\nRank these chunks by relevance. Return ONLY the top 5 IDs as comma-separated numbers (most relevant first):\n${numbered}`,
     })
 
-    const text = response.content[0]?.type === 'text' ? response.content[0].text : ''
+    const text = response.text || ''
     const ids = text.match(/\d+/g)?.map(Number).filter(n => n < chunks.length) || []
 
     const ranked = ids.slice(0, 5).map(i => chunks[i])
-    // Fill up to 5 if Haiku returned fewer
+    // Fill up to 5 if model returned fewer
     while (ranked.length < 5 && ranked.length < chunks.length) {
       const next = chunks.find(c => !ranked.includes(c))
       if (next) ranked.push(next)
@@ -157,9 +153,10 @@ export async function rerankChunks(query, chunks, anthropicClient) {
     // Diversify: ensure each distinct article has at least one representative
     const diversified = diversifyByArticle(ranked)
 
+    const usage = response.usageMetadata
     return {
       chunks: diversified, latencyMs: Date.now() - t0, rerankedOrder: ids.slice(0, 5),
-      usage: { input_tokens: response.usage?.input_tokens || 0, output_tokens: response.usage?.output_tokens || 0 },
+      usage: { input_tokens: usage?.promptTokenCount || 0, output_tokens: usage?.responseTokenCount || 0 },
     }
   } catch {
     // Fallback: use original order with diversity
@@ -296,7 +293,7 @@ export function detectMentionedArticles(responseText) {
 // RAG: full agentic search pipeline
 // ---------------------------------------------------------------------------
 
-export async function searchPortfolio(query, trace, anthropicClient) {
+export async function searchPortfolio(query, trace, geminiClient) {
   const result = {
     chunks: null,
     sources: [],
@@ -351,8 +348,8 @@ export async function searchPortfolio(query, trace, anthropicClient) {
     }
 
     // 3. Re-rank
-    const rerankGen = trace?.generation({ name: 'reranking', model: 'claude-haiku-4-5-20251001', metadata: { query } })
-    const rerankResult = await rerankChunks(query, filteredChunks, anthropicClient)
+    const rerankGen = trace?.generation({ name: 'reranking', model: 'gemini-2.0-flash-lite', metadata: { query } })
+    const rerankResult = await rerankChunks(query, filteredChunks, geminiClient)
     result.metrics.rerankMs = rerankResult.latencyMs
     if (rerankResult.usage) {
       result.usage.rerankInputTokens = rerankResult.usage.input_tokens
